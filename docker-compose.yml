@@ -1,0 +1,165 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # PostgreSQL - Primary Database
+  # ===========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: pm_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-project_mgmt}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pm_network
+
+  # ===========================================
+  # ClickHouse - Analytics Database
+  # ===========================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: pm_clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-project_mgmt}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./db/clickhouse:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [ "CMD", "clickhouse-client", "--query", "SELECT 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pm_network
+
+  # ===========================================
+  # Apache Superset - BI Dashboard
+  # ===========================================
+  superset:
+    image: apache/superset:3.0.0
+    container_name: pm_superset
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-supersecretkey123}
+      SUPERSET_CONFIG_PATH: /app/superset_setup/superset_config.py
+    ports:
+      - "${SUPERSET_PORT:-8088}:8088"
+    volumes:
+      - superset_data:/app/superset_home
+      - ./dashboards/superset:/app/superset_setup:ro
+    networks:
+      - pm_network
+    command: >
+      bash -c "
+        pip install flask-session &&
+        superset db upgrade &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin123 || true &&
+        superset init &&
+        gunicorn --bind 0.0.0.0:8088 --workers 2 --threads 4 --timeout 120 'superset.app:create_app()'
+      "
+
+  # ===========================================
+  # Grafana - Real-time Monitoring
+  # ===========================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: pm_grafana
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./dashboards/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - pm_network
+
+  # ===========================================
+  # Plotly Dash - Custom Dashboard
+  # ===========================================
+  dash:
+    build:
+      context: ./dashboards/dash_app
+      dockerfile: Dockerfile
+    container_name: pm_dash
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-project_mgmt}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-project_mgmt}
+    ports:
+      - "${DASH_PORT:-8050}:8050"
+    networks:
+      - pm_network
+
+  # ===========================================
+  # pgAdmin - PostgreSQL GUI
+  # ===========================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pm_pgadmin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - pm_network
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  superset_data:
+  grafana_data:
+  pgadmin_data:
+
+
+networks:
+  pm_network:
+    driver: bridge

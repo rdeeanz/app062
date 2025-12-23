@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'Project Management Dashboards'
+    orgId: 1
+    folder: 'Project Management'
+    folderUid: 'project-mgmt'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
