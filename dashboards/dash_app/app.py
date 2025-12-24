@@ -1,9 +1,8 @@
 """
-Plotly Dash Custom Dashboard
-Real-time project management visualization.
+Plotly Dash Multi-Page Dashboard
+Project management visualization with navigation menu.
 """
 import os
-import sys
 from decimal import Decimal
 
 import dash
@@ -40,6 +39,7 @@ def fetch_projects():
                     id_root, klaster_regional, entitas_terminal, 
                     project_definition, type_investasi, tahun_rkap,
                     status_investasi, status_issue, rkap, nilai_kontrak,
+                    kebutuhan_dana, asset_categories,
                     realisasi_januari + realisasi_februari + realisasi_maret +
                     realisasi_april + realisasi_mei + realisasi_juni +
                     realisasi_juli + realisasi_agustus + realisasi_september +
@@ -119,56 +119,297 @@ def fetch_monthly_realization():
             conn.close()
 
 
+def fetch_investment_by_category():
+    """Fetch investment summary by asset category."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 
+                    asset_categories,
+                    COUNT(*) as item_count,
+                    COALESCE(SUM(kebutuhan_dana), 0) as total_kebutuhan,
+                    COALESCE(SUM(rkap), 0) as total_rkap,
+                    COALESCE(SUM(
+                        realisasi_januari + realisasi_februari + realisasi_maret +
+                        realisasi_april + realisasi_mei + realisasi_juni +
+                        realisasi_juli + realisasi_agustus + realisasi_september +
+                        realisasi_oktober + realisasi_november + realisasi_desember
+                    ), 0) as total_realisasi
+                FROM project_investasi
+                GROUP BY asset_categories
+                ORDER BY asset_categories
+            """)
+            return cur.fetchall()
+    except Exception as e:
+        print(f"Database error: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def fetch_investment_by_status():
+    """Fetch investment summary by status."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 
+                    COALESCE(NULLIF(status_investasi, ''), 'Belum Ditentukan') as status,
+                    COUNT(*) as count
+                FROM project_investasi
+                GROUP BY status_investasi
+                ORDER BY count DESC
+            """)
+            return cur.fetchall()
+    except Exception as e:
+        print(f"Database error: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
 # ===========================================
 # Initialize Dash App
 # ===========================================
 
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+    external_stylesheets=[
+        dbc.themes.DARKLY,
+        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    ],
     title="Project Management Dashboard",
-    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}]
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
+    suppress_callback_exceptions=True
 )
 
 server = app.server
 
 # ===========================================
-# Layout Components
+# Sidebar Navigation
 # ===========================================
 
-def create_kpi_card(title, value, subtitle="", color="primary"):
-    """Create a KPI card component."""
+SIDEBAR_STYLE = {
+    "position": "fixed",
+    "top": 0,
+    "left": 0,
+    "bottom": 0,
+    "width": "220px",
+    "padding": "20px 15px",
+    "backgroundColor": "#1a1a2e",
+}
+
+CONTENT_STYLE = {
+    "marginLeft": "240px",
+    "padding": "20px",
+}
+
+sidebar = html.Div([
+    html.Div([
+        html.I(className="fas fa-chart-pie fa-2x text-info"),
+        html.Span(" Dashboard", className="text-white fs-5 ms-2"),
+    ], className="mb-4 text-center"),
+    
+    html.Hr(style={"borderColor": "#444"}),
+    
+    dbc.Nav([
+        dbc.NavLink([html.I(className="fas fa-home me-2"), "Overview"], href="/", active="exact"),
+        dbc.NavLink([html.I(className="fas fa-chart-bar me-2"), "Investment"], href="/investment", active="exact"),
+        dbc.NavLink([html.I(className="fas fa-list me-2"), "Project List"], href="/projects", active="exact"),
+        dbc.NavLink([html.I(className="fas fa-chart-line me-2"), "Trends"], href="/trends", active="exact"),
+        dbc.NavLink([html.I(className="fas fa-map me-2"), "Map"], href="/map", active="exact"),
+    ], vertical=True, pills=True),
+    
+    html.Hr(style={"borderColor": "#444"}),
+    html.Small("© 2025 Project Management", className="text-muted"),
+], style=SIDEBAR_STYLE)
+
+
+# ===========================================
+# Helper Components
+# ===========================================
+
+def create_kpi_card(title, value, subtitle="", color="primary", icon=""):
     return dbc.Card([
         dbc.CardBody([
+            html.Div([html.I(className=f"fas {icon} fa-2x text-{color} opacity-50")], className="float-end") if icon else None,
             html.H6(title, className="card-subtitle text-muted mb-2"),
             html.H3(value, className=f"card-title text-{color}"),
-            html.P(subtitle, className="card-text small text-muted")
+            html.P(subtitle, className="card-text small text-muted mb-0")
         ])
     ], className="shadow-sm h-100")
 
 
-def create_header():
-    """Create dashboard header."""
-    return dbc.Navbar(
-        dbc.Container([
-            dbc.NavbarBrand([
-                html.I(className="fas fa-chart-line me-2"),
-                "Project Management Dashboard"
-            ], className="fs-4"),
-            dbc.Nav([
-                dbc.NavItem(dbc.Button(
-                    [html.I(className="fas fa-sync-alt me-2"), "Refresh"],
-                    id="refresh-btn",
-                    color="light",
-                    outline=True,
-                    size="sm"
-                ))
-            ])
+# ===========================================
+# Page Layouts
+# ===========================================
+
+def page_overview():
+    return html.Div([
+        html.H2("Dashboard Overview", className="mb-4"),
+        dbc.Row([
+            dbc.Col([html.Div(id="kpi-projects")], md=3),
+            dbc.Col([html.Div(id="kpi-rkap")], md=3),
+            dbc.Col([html.Div(id="kpi-realisasi")], md=3),
+            dbc.Col([html.Div(id="kpi-issues")], md=3),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("RKAP vs Realisasi by Regional"),
+                    dbc.CardBody([dcc.Graph(id="chart-regional", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=6),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Monthly Realization Trend"),
+                    dbc.CardBody([dcc.Graph(id="chart-monthly", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=6),
+        ], className="mb-4"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Investment Type"),
+                    dbc.CardBody([dcc.Graph(id="chart-type", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=4),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Issue Status"),
+                    dbc.CardBody([dcc.Graph(id="chart-issues", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=4),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Project Locations"),
+                    dbc.CardBody([dcc.Graph(id="chart-overview-map", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=4),
         ]),
-        color="dark",
-        dark=True,
-        className="mb-4"
-    )
+    ])
+
+
+def page_investment():
+    return html.Div([
+        html.H2("Investment Dashboard", className="mb-4"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H5("Capaian RKAP", className="text-center text-muted"),
+                        html.Div(id="gauge-capaian")
+                    ])
+                ], className="shadow-sm", style={"minHeight": "250px"})
+            ], md=3),
+            dbc.Col([
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([dbc.CardBody([
+                            html.H6("Total Item", className="text-muted"),
+                            html.H2(id="stat-total-item", className="text-info"),
+                        ])], className="shadow-sm mb-3")
+                    ], md=6),
+                    dbc.Col([
+                        dbc.Card([dbc.CardBody([
+                            html.H6("Total RKAP", className="text-muted"),
+                            html.H4(id="stat-total-rkap", className="text-success"),
+                        ])], className="shadow-sm mb-3")
+                    ], md=6),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([dbc.CardBody([
+                            html.H6("Kebutuhan Dana", className="text-muted"),
+                            html.H4(id="stat-kebutuhan", className="text-warning"),
+                        ])], className="shadow-sm")
+                    ], md=6),
+                    dbc.Col([
+                        dbc.Card([dbc.CardBody([
+                            html.H6("Total Realisasi", className="text-muted"),
+                            html.H4(id="stat-realisasi", className="text-primary"),
+                        ])], className="shadow-sm")
+                    ], md=6),
+                ]),
+            ], md=5),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Status Program"),
+                    dbc.CardBody([dcc.Graph(id="chart-status", config={"displayModeBar": False}, style={"height": "200px"})])
+                ], className="shadow-sm h-100")
+            ], md=4),
+        ], className="mb-4"),
+        dbc.Card([
+            dbc.CardHeader("Investasi per Kategori"),
+            dbc.CardBody([html.Div(id="table-category")])
+        ], className="shadow-sm"),
+    ])
+
+
+def page_projects():
+    return html.Div([
+        html.H2("Project List", className="mb-4"),
+        dbc.Card([
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([dcc.Dropdown(id="f-regional", placeholder="Regional", clearable=True)], md=2),
+                    dbc.Col([dcc.Dropdown(id="f-terminal", placeholder="Terminal", clearable=True)], md=3),
+                    dbc.Col([dcc.Dropdown(id="f-type", placeholder="Type", clearable=True)], md=2),
+                    dbc.Col([dcc.Dropdown(id="f-tahun", placeholder="Tahun", clearable=True)], md=2),
+                    dbc.Col([dcc.Dropdown(id="f-status", placeholder="Status", clearable=True)], md=2),
+                    dbc.Col([dbc.Button("Reset", id="btn-reset", size="sm", className="w-100")], md=1),
+                ])
+            ])
+        ], className="shadow-sm mb-4"),
+        dbc.Card([
+            dbc.CardBody([html.Div(id="project-table")])
+        ], className="shadow-sm"),
+        dcc.Store(id="projects-store"),
+    ])
+
+
+def page_trends():
+    return html.Div([
+        html.H2("Trend Analysis", className="mb-4"),
+        dbc.Card([
+            dbc.CardHeader("Realisasi Bulanan"),
+            dbc.CardBody([dcc.Graph(id="chart-trend-monthly", config={"displayModeBar": False}, style={"height": "400px"})])
+        ], className="shadow-sm mb-4"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("RKAP vs Realisasi per Kategori"),
+                    dbc.CardBody([dcc.Graph(id="chart-cat-compare", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=6),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Capaian per Kategori (%)"),
+                    dbc.CardBody([dcc.Graph(id="chart-cat-pct", config={"displayModeBar": False})])
+                ], className="shadow-sm")
+            ], md=6),
+        ]),
+    ])
+
+
+def page_map():
+    return html.Div([
+        html.H2("Peta Lokasi Project", className="mb-4"),
+        dbc.Card([
+            dbc.CardBody([dcc.Graph(id="full-map", config={"displayModeBar": True}, style={"height": "600px"})])
+        ], className="shadow-sm"),
+    ])
+
+
+def page_404():
+    return html.Div([
+        html.H1("404", className="display-1 text-muted text-center"),
+        html.P("Halaman tidak ditemukan", className="text-center"),
+        dbc.Button("Kembali", href="/", className="d-block mx-auto"),
+    ], className="py-5")
 
 
 # ===========================================
@@ -176,312 +417,228 @@ def create_header():
 # ===========================================
 
 app.layout = html.Div([
-    create_header(),
-    
-    dbc.Container([
-        # KPI Row
-        dbc.Row([
-            dbc.Col([
-                html.Div(id="kpi-total-projects")
-            ], md=3),
-            dbc.Col([
-                html.Div(id="kpi-total-rkap")
-            ], md=3),
-            dbc.Col([
-                html.Div(id="kpi-total-realisasi")
-            ], md=3),
-            dbc.Col([
-                html.Div(id="kpi-open-issues")
-            ], md=3),
-        ], className="mb-4"),
-        
-        # Charts Row 1
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("RKAP vs Realisasi by Regional"),
-                    dbc.CardBody([
-                        dcc.Graph(id="chart-rkap-realisasi", config={"displayModeBar": False})
-                    ])
-                ], className="shadow-sm")
-            ], md=6),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Monthly Realization Trend"),
-                    dbc.CardBody([
-                        dcc.Graph(id="chart-monthly-trend", config={"displayModeBar": False})
-                    ])
-                ], className="shadow-sm")
-            ], md=6),
-        ], className="mb-4"),
-        
-        # Charts Row 2
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Investment Type Distribution"),
-                    dbc.CardBody([
-                        dcc.Graph(id="chart-investment-type", config={"displayModeBar": False})
-                    ])
-                ], className="shadow-sm")
-            ], md=4),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Issue Status"),
-                    dbc.CardBody([
-                        dcc.Graph(id="chart-issue-status", config={"displayModeBar": False})
-                    ])
-                ], className="shadow-sm")
-            ], md=4),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Project Locations"),
-                    dbc.CardBody([
-                        dcc.Graph(id="chart-map", config={"displayModeBar": False})
-                    ])
-                ], className="shadow-sm")
-            ], md=4),
-        ], className="mb-4"),
-        
-        # Project Table
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Project List"),
-                    dbc.CardBody([
-                        html.Div(id="project-table")
-                    ])
-                ], className="shadow-sm")
-            ])
-        ]),
-        
-        # Footer
-        html.Footer([
-            html.Hr(),
-            html.P("Project Management Dashboard © 2025", className="text-center text-muted")
-        ], className="mt-4")
-    ], fluid=True),
-    
-    # Interval for auto-refresh
-    dcc.Interval(
-        id='interval-component',
-        interval=60*1000,  # 60 seconds
-        n_intervals=0
-    )
+    dcc.Location(id='url', refresh=False),
+    sidebar,
+    html.Div(id='page-content', style=CONTENT_STYLE),
+    dcc.Interval(id='interval', interval=60*1000, n_intervals=0),
 ])
 
 
 # ===========================================
-# Callbacks
+# Routing Callback
+# ===========================================
+
+@callback(Output('page-content', 'children'), Input('url', 'pathname'))
+def route_page(pathname):
+    if pathname == '/': return page_overview()
+    elif pathname == '/investment': return page_investment()
+    elif pathname == '/projects': return page_projects()
+    elif pathname == '/trends': return page_trends()
+    elif pathname == '/map': return page_map()
+    return page_404()
+
+
+# ===========================================
+# Overview Page Callbacks
 # ===========================================
 
 @callback(
-    [
-        Output("kpi-total-projects", "children"),
-        Output("kpi-total-rkap", "children"),
-        Output("kpi-total-realisasi", "children"),
-        Output("kpi-open-issues", "children"),
-        Output("chart-rkap-realisasi", "figure"),
-        Output("chart-monthly-trend", "figure"),
-        Output("chart-investment-type", "figure"),
-        Output("chart-issue-status", "figure"),
-        Output("chart-map", "figure"),
-        Output("project-table", "children"),
-    ],
-    [
-        Input("interval-component", "n_intervals"),
-        Input("refresh-btn", "n_clicks")
-    ]
+    [Output("kpi-projects", "children"), Output("kpi-rkap", "children"), Output("kpi-realisasi", "children"), Output("kpi-issues", "children"),
+     Output("chart-regional", "figure"), Output("chart-monthly", "figure"), Output("chart-type", "figure"), Output("chart-issues", "figure"), Output("chart-overview-map", "figure")],
+    [Input("interval", "n_intervals")]
 )
-def update_dashboard(n_intervals, n_clicks):
-    """Update all dashboard components."""
-    
-    # Fetch data
+def update_overview(n):
     projects = fetch_projects()
     summary = fetch_summary_by_regional()
     monthly = fetch_monthly_realization()
+    df = pd.DataFrame(projects) if projects else pd.DataFrame()
+    df_sum = pd.DataFrame(summary) if summary else pd.DataFrame()
     
-    df_projects = pd.DataFrame(projects) if projects else pd.DataFrame()
-    df_summary = pd.DataFrame(summary) if summary else pd.DataFrame()
+    total = len(projects)
+    rkap = sum(float(p.get('rkap') or 0) for p in projects)
+    real = sum(float(p.get('total_realisasi') or 0) for p in projects)
+    issues = sum(1 for p in projects if p.get('status_issue') == 'Open')
+    pct = (real / rkap * 100) if rkap > 0 else 0
     
-    # Calculate KPIs
-    total_projects = len(projects)
-    total_rkap = sum(float(p.get('rkap') or 0) for p in projects)
-    total_realisasi = sum(float(p.get('total_realisasi') or 0) for p in projects)
-    open_issues = sum(1 for p in projects if p.get('status_issue') == 'Open')
+    kpi1 = create_kpi_card("Total Projects", f"{total:,}", "Active", "info", "fa-folder")
+    kpi2 = create_kpi_card("Total RKAP", f"Rp {rkap/1e9:.2f}B", "Budget", "success", "fa-money-bill")
+    kpi3 = create_kpi_card("Total Realisasi", f"Rp {real/1e9:.2f}B", f"{pct:.1f}%", "primary", "fa-chart-line")
+    kpi4 = create_kpi_card("Open Issues", f"{issues}", "Pending", "warning", "fa-exclamation")
     
-    serapan_pct = (total_realisasi / total_rkap * 100) if total_rkap > 0 else 0
-    
-    # KPI Cards
-    kpi_projects = create_kpi_card("Total Projects", f"{total_projects:,}", "Active projects")
-    kpi_rkap = create_kpi_card("Total RKAP", f"Rp {total_rkap/1e9:.2f}B", "Budget allocation", "info")
-    kpi_realisasi = create_kpi_card("Total Realisasi", f"Rp {total_realisasi/1e9:.2f}B", f"{serapan_pct:.1f}% absorption", "success")
-    kpi_issues = create_kpi_card("Open Issues", f"{open_issues}", "Pending resolution", "warning")
-    
-    # Chart: RKAP vs Realisasi
-    if not df_summary.empty:
-        fig_rkap = go.Figure()
-        fig_rkap.add_trace(go.Bar(
-            name='RKAP',
-            x=df_summary['klaster_regional'],
-            y=df_summary['total_rkap'],
-            marker_color='#3498db'
-        ))
-        fig_rkap.add_trace(go.Bar(
-            name='Realisasi',
-            x=df_summary['klaster_regional'],
-            y=df_summary['total_realisasi'],
-            marker_color='#2ecc71'
-        ))
-        fig_rkap.update_layout(
-            barmode='group',
-            template='plotly_dark',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=20, r=20, t=20, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02)
-        )
+    # Charts
+    if not df_sum.empty:
+        fig1 = go.Figure()
+        fig1.add_trace(go.Bar(name='RKAP', x=df_sum['klaster_regional'], y=df_sum['total_rkap'], marker_color='#3498db'))
+        fig1.add_trace(go.Bar(name='Realisasi', x=df_sum['klaster_regional'], y=df_sum['total_realisasi'], marker_color='#2ecc71'))
+        fig1.update_layout(barmode='group', template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=20,r=20,t=20,b=20))
     else:
-        fig_rkap = go.Figure()
-        fig_rkap.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        fig1 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     
-    # Chart: Monthly Trend
     if monthly:
-        months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
-        values = [
-            float(monthly.get('januari') or 0),
-            float(monthly.get('februari') or 0),
-            float(monthly.get('maret') or 0),
-            float(monthly.get('april') or 0),
-            float(monthly.get('mei') or 0),
-            float(monthly.get('juni') or 0),
-            float(monthly.get('juli') or 0),
-            float(monthly.get('agustus') or 0),
-            float(monthly.get('september') or 0),
-            float(monthly.get('oktober') or 0),
-            float(monthly.get('november') or 0),
-            float(monthly.get('desember') or 0),
-        ]
-        
-        fig_monthly = go.Figure()
-        fig_monthly.add_trace(go.Scatter(
-            x=months, y=values,
-            mode='lines+markers',
-            fill='tozeroy',
-            line=dict(color='#9b59b6'),
-            marker=dict(size=8)
-        ))
-        fig_monthly.update_layout(
-            template='plotly_dark',
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=20, r=20, t=20, b=20)
-        )
+        months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
+        vals = [float(monthly.get(m) or 0) for m in ['januari','februari','maret','april','mei','juni','juli','agustus','september','oktober','november','desember']]
+        fig2 = go.Figure(go.Scatter(x=months, y=vals, mode='lines+markers', fill='tozeroy', line=dict(color='#9b59b6')))
+        fig2.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=20,r=20,t=20,b=20))
     else:
-        fig_monthly = go.Figure()
-        fig_monthly.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        fig2 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     
-    # Chart: Investment Type
-    if not df_projects.empty and 'type_investasi' in df_projects.columns:
-        type_counts = df_projects['type_investasi'].value_counts()
-        fig_type = go.Figure(data=[go.Pie(
-            labels=type_counts.index.tolist(),
-            values=type_counts.values.tolist(),
-            hole=0.4,
-            marker_colors=['#3498db', '#e74c3c', '#f39c12']
-        )])
-        fig_type.update_layout(
-            template='plotly_dark',
-            paper_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=20, r=20, t=20, b=20),
-            showlegend=True
-        )
+    if not df.empty and 'type_investasi' in df.columns:
+        tc = df['type_investasi'].value_counts()
+        fig3 = go.Figure(go.Pie(labels=tc.index.tolist(), values=tc.values.tolist(), hole=0.4))
+        fig3.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=20,r=20,t=20,b=20))
     else:
-        fig_type = go.Figure()
-        fig_type.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        fig3 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     
-    # Chart: Issue Status
-    if not df_summary.empty:
-        total_open = df_summary['open_issues'].sum()
-        total_closed = df_summary['closed_issues'].sum()
-        
-        fig_issues = go.Figure(data=[go.Pie(
-            labels=['Open', 'Closed'],
-            values=[total_open, total_closed],
-            hole=0.5,
-            marker_colors=['#e74c3c', '#2ecc71']
-        )])
-        fig_issues.update_layout(
-            template='plotly_dark',
-            paper_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=20, r=20, t=20, b=20)
-        )
+    if not df_sum.empty:
+        fig4 = go.Figure(go.Pie(labels=['Open','Closed'], values=[df_sum['open_issues'].sum(), df_sum['closed_issues'].sum()], hole=0.5, marker_colors=['#e74c3c','#2ecc71']))
+        fig4.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=20,r=20,t=20,b=20))
     else:
-        fig_issues = go.Figure()
-        fig_issues.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        fig4 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     
-    # Chart: Map
-    if not df_projects.empty and 'latitude' in df_projects.columns:
-        df_map = df_projects.dropna(subset=['latitude', 'longitude'])
-        if not df_map.empty:
-            fig_map = px.scatter_mapbox(
-                df_map,
-                lat='latitude',
-                lon='longitude',
-                hover_name='project_definition',
-                hover_data=['klaster_regional', 'status_investasi'],
-                color_discrete_sequence=['#3498db'],
-                zoom=4
-            )
-            fig_map.update_layout(
-                mapbox_style='carto-darkmatter',
-                paper_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=0, r=0, t=0, b=0)
-            )
+    if not df.empty and 'latitude' in df.columns:
+        dm = df.dropna(subset=['latitude','longitude'])
+        if not dm.empty:
+            fig5 = px.scatter_mapbox(dm, lat='latitude', lon='longitude', hover_name='project_definition', zoom=4)
+            fig5.update_layout(mapbox_style='carto-darkmatter', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0,r=0,t=0,b=0))
         else:
-            fig_map = go.Figure()
-            fig_map.add_annotation(text="No location data available", showarrow=False)
-            fig_map.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+            fig5 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     else:
-        fig_map = go.Figure()
-        fig_map.add_annotation(text="No location data available", showarrow=False)
-        fig_map.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        fig5 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
     
-    # Project Table
-    if not df_projects.empty:
-        display_cols = ['id_root', 'klaster_regional', 'entitas_terminal', 
-                       'type_investasi', 'tahun_rkap', 'status_issue']
-        df_display = df_projects[display_cols].head(20)
-        
-        table = dash_table.DataTable(
-            data=df_display.to_dict('records'),
-            columns=[{"name": col, "id": col} for col in display_cols],
-            style_cell={
-                'backgroundColor': '#303030',
-                'color': 'white',
-                'textAlign': 'left',
-                'padding': '10px'
-            },
-            style_header={
-                'backgroundColor': '#404040',
-                'fontWeight': 'bold'
-            },
-            style_data_conditional=[
-                {
-                    'if': {'filter_query': '{status_issue} = "Open"'},
-                    'backgroundColor': 'rgba(231, 76, 60, 0.2)'
-                }
-            ],
-            page_size=10
+    return kpi1, kpi2, kpi3, kpi4, fig1, fig2, fig3, fig4, fig5
+
+
+# ===========================================
+# Investment Page Callbacks
+# ===========================================
+
+@callback(
+    [Output("gauge-capaian", "children"), Output("stat-total-item", "children"), Output("stat-total-rkap", "children"),
+     Output("stat-kebutuhan", "children"), Output("stat-realisasi", "children"), Output("chart-status", "figure"), Output("table-category", "children")],
+    [Input("interval", "n_intervals")]
+)
+def update_investment(n):
+    projects = fetch_projects()
+    cats = fetch_investment_by_category()
+    status = fetch_investment_by_status()
+    
+    total = len(projects)
+    rkap = sum(float(p.get('rkap') or 0) for p in projects)
+    keb = sum(float(p.get('kebutuhan_dana') or 0) for p in projects)
+    real = sum(float(p.get('total_realisasi') or 0) for p in projects)
+    cap = (real / rkap * 100) if rkap > 0 else 0
+    
+    gf = go.Figure(go.Indicator(mode="gauge+number", value=cap, gauge={'axis':{'range':[0,100]}, 'bar':{'color':'#2ecc71'}}))
+    gf.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', height=180, margin=dict(l=20,r=20,t=20,b=20))
+    gauge = dcc.Graph(figure=gf, config={"displayModeBar": False})
+    
+    if status:
+        ds = pd.DataFrame(status)
+        fs = go.Figure(go.Bar(x=ds['count'], y=ds['status'], orientation='h', marker_color='#3498db'))
+        fs.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10,r=10,t=10,b=10), yaxis={'categoryorder':'total ascending'})
+    else:
+        fs = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+    
+    if cats:
+        dc = pd.DataFrame(cats)
+        dc['capaian'] = dc.apply(lambda r: round((r['total_realisasi']/r['total_rkap']*100),2) if r['total_rkap']>0 else 0, axis=1)
+        tbl = dash_table.DataTable(
+            data=dc.to_dict('records'),
+            columns=[{"name":"Kategori","id":"asset_categories"},{"name":"Item","id":"item_count"},{"name":"Kebutuhan","id":"total_kebutuhan","type":"numeric","format":{"specifier":",.0f"}},{"name":"RKAP","id":"total_rkap","type":"numeric","format":{"specifier":",.0f"}},{"name":"Realisasi","id":"total_realisasi","type":"numeric","format":{"specifier":",.0f"}},{"name":"Capaian(%)","id":"capaian"}],
+            style_cell={'backgroundColor':'#303030','color':'white','textAlign':'left','padding':'10px'},
+            style_header={'backgroundColor':'#404040','fontWeight':'bold'},
+            page_size=10,
         )
     else:
-        table = html.P("No projects found.", className="text-muted")
+        tbl = html.P("No data", className="text-muted")
     
-    return (
-        kpi_projects, kpi_rkap, kpi_realisasi, kpi_issues,
-        fig_rkap, fig_monthly, fig_type, fig_issues, fig_map,
-        table
-    )
+    return gauge, f"{total:,}", f"Rp {rkap/1e6:,.0f}Jt", f"Rp {keb/1e6:,.0f}Jt", f"Rp {real/1e6:,.0f}Jt", fs, tbl
+
+
+# ===========================================
+# Projects Page Callbacks
+# ===========================================
+
+@callback(
+    [Output("projects-store", "data"), Output("f-regional", "options"), Output("f-terminal", "options"), Output("f-type", "options"), Output("f-tahun", "options"), Output("f-status", "options")],
+    [Input("interval", "n_intervals")]
+)
+def load_projects(n):
+    projects = fetch_projects()
+    df = pd.DataFrame(projects) if projects else pd.DataFrame()
+    if not df.empty:
+        cols = ['id_root','klaster_regional','entitas_terminal','type_investasi','tahun_rkap','status_issue']
+        return df[cols].to_dict('records'), [{"label":v,"value":v} for v in sorted(df['klaster_regional'].dropna().unique())], [{"label":v,"value":v} for v in sorted(df['entitas_terminal'].dropna().unique())], [{"label":v,"value":v} for v in sorted(df['type_investasi'].dropna().unique())], [{"label":str(v),"value":v} for v in sorted(df['tahun_rkap'].dropna().unique())], [{"label":v if v else "N/A","value":v if v else ""} for v in df['status_issue'].dropna().unique()]
+    return [], [], [], [], [], []
+
+@callback(Output("project-table", "children"), [Input("projects-store", "data"), Input("f-regional", "value"), Input("f-terminal", "value"), Input("f-type", "value"), Input("f-tahun", "value"), Input("f-status", "value")])
+def filter_projects(data, fr, ft, fty, fy, fs):
+    if not data: return html.P("No data", className="text-muted")
+    df = pd.DataFrame(data)
+    if fr: df = df[df['klaster_regional']==fr]
+    if ft: df = df[df['entitas_terminal']==ft]
+    if fty: df = df[df['type_investasi']==fty]
+    if fy: df = df[df['tahun_rkap']==fy]
+    if fs: df = df[df['status_issue']==fs]
+    if df.empty: return html.P("No matching data", className="text-muted")
+    return dash_table.DataTable(data=df.to_dict('records'), columns=[{"name":c.replace('_',' ').title(),"id":c} for c in df.columns], style_cell={'backgroundColor':'#303030','color':'white','textAlign':'left','padding':'10px'}, style_header={'backgroundColor':'#404040','fontWeight':'bold'}, page_size=20, sort_action='native')
+
+@callback([Output("f-regional", "value"), Output("f-terminal", "value"), Output("f-type", "value"), Output("f-tahun", "value"), Output("f-status", "value")], Input("btn-reset", "n_clicks"), prevent_initial_call=True)
+def reset_filters(n): return None, None, None, None, None
+
+
+# ===========================================
+# Trends Page Callbacks
+# ===========================================
+
+@callback([Output("chart-trend-monthly", "figure"), Output("chart-cat-compare", "figure"), Output("chart-cat-pct", "figure")], [Input("interval", "n_intervals")])
+def update_trends(n):
+    monthly = fetch_monthly_realization()
+    cats = fetch_investment_by_category()
+    
+    if monthly:
+        months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
+        vals = [float(monthly.get(m.lower()) or 0) for m in ['januari','februari','maret','april','mei','juni','juli','agustus','september','oktober','november','desember']]
+        f1 = go.Figure(go.Scatter(x=months, y=vals, mode='lines+markers', fill='tozeroy', line=dict(color='#3498db', width=3)))
+        f1.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=40,r=40,t=20,b=40))
+    else:
+        f1 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+    
+    if cats:
+        dc = pd.DataFrame(cats)
+        f2 = go.Figure()
+        f2.add_trace(go.Bar(name='RKAP', x=dc['asset_categories'], y=dc['total_rkap'], marker_color='#3498db'))
+        f2.add_trace(go.Bar(name='Realisasi', x=dc['asset_categories'], y=dc['total_realisasi'], marker_color='#2ecc71'))
+        f2.update_layout(barmode='group', template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=40,r=20,t=20,b=80))
+        
+        dc['cap'] = dc.apply(lambda r: (r['total_realisasi']/r['total_rkap']*100) if r['total_rkap']>0 else 0, axis=1)
+        f3 = go.Figure(go.Bar(x=dc['asset_categories'], y=dc['cap'], marker_color=['#2ecc71' if c>=50 else '#e74c3c' for c in dc['cap']], text=[f'{c:.1f}%' for c in dc['cap']], textposition='outside'))
+        f3.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=40,r=20,t=40,b=80))
+    else:
+        f2 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+        f3 = go.Figure().update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+    
+    return f1, f2, f3
+
+
+# ===========================================
+# Map Page Callback
+# ===========================================
+
+@callback(Output("full-map", "figure"), [Input("interval", "n_intervals")])
+def update_map(n):
+    projects = fetch_projects()
+    df = pd.DataFrame(projects) if projects else pd.DataFrame()
+    if not df.empty and 'latitude' in df.columns:
+        dm = df.dropna(subset=['latitude','longitude'])
+        if not dm.empty:
+            fig = px.scatter_mapbox(dm, lat='latitude', lon='longitude', hover_name='project_definition', hover_data=['klaster_regional','status_investasi','rkap'], color='status_investasi', zoom=5, height=600)
+            fig.update_layout(mapbox_style='carto-darkmatter', paper_bgcolor='rgba(0,0,0,0)', margin=dict(l=0,r=0,t=0,b=0))
+            return fig
+    fig = go.Figure()
+    fig.add_annotation(text="No location data", showarrow=False, font=dict(size=20))
+    fig.update_layout(template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)')
+    return fig
 
 
 # ===========================================
