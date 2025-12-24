@@ -152,6 +152,34 @@ services:
     networks:
       - pm_network
 
+  # ===========================================
+  # Sync Daemon - PostgreSQL → ClickHouse
+  # ===========================================
+  sync_daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile.sync
+    container_name: pm_sync_daemon
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-project_mgmt}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-project_mgmt}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse123}
+    networks:
+      - pm_network
+
 volumes:
   postgres_data:
   clickhouse_data:

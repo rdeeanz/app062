@@ -1,0 +1,15 @@
+# Dockerfile for Sync Daemon
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    psycopg2-binary==2.9.9 \
+    clickhouse-driver==0.2.6
+
+# Copy sync daemon script
+COPY sync_daemon.py .
+
+# Run the daemon
+CMD ["python", "-u", "sync_daemon.py"]

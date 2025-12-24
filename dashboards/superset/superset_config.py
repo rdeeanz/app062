@@ -13,25 +13,22 @@ WTF_CSRF_ENABLED = False
 FAB_CSRF_ENABLED = False
 
 # ============================================
-# SESSION CONFIGURATION - Critical for login
+# SESSION CONFIGURATION - Using filesystem for stability
 # ============================================
-from flask_session import Session
-
-# Use SQLAlchemy session (same DB as metadata)
-SESSION_TYPE = 'sqlalchemy'
-SESSION_SQLALCHEMY_TABLE = 'sessions'
+SESSION_TYPE = 'filesystem'
+SESSION_FILE_DIR = '/app/superset_home/sessions'
 SESSION_PERMANENT = True
 PERMANENT_SESSION_LIFETIME = timedelta(days=1)
 SESSION_USE_SIGNER = True
 SESSION_KEY_PREFIX = 'superset_session:'
 
-# Cookie settings
+# Cookie settings - relaxed for cross-origin access
 SESSION_COOKIE_NAME = 'superset_session'
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = False
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_PATH = '/'
-SESSION_COOKIE_DOMAIN = None  # Allow any domain
+SESSION_COOKIE_DOMAIN = None
 
 # Feature flags
 FEATURE_FLAGS = {
@@ -49,12 +46,12 @@ SUPERSET_WEBSERVER_PROTOCOL = "http"
 SUPERSET_WEBSERVER_ADDRESS = "0.0.0.0"
 SUPERSET_WEBSERVER_PORT = 8088
 
-# Enable proxy fix
+# Enable proxy fix for reverse proxy
 ENABLE_PROXY_FIX = True
 PROXY_FIX_CONFIG = {"x_for": 1, "x_proto": 1, "x_host": 1, "x_prefix": 1}
 
 # Public role
 PUBLIC_ROLE_LIKE = "Gamma"
 
-# Flask-Login
+# Flask-Login - use database auth
 AUTH_TYPE = 1

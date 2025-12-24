@@ -513,7 +513,7 @@
           },
           "format": 2,
           "queryType": "sql",
-          "rawSql": "SELECT status_issue as name, count() as value FROM project_mgmt.project_investasi WHERE status_issue != '' GROUP BY status_issue",
+          "rawSql": "SELECT toString(status_issue) as name, count() as value FROM project_mgmt.project_investasi GROUP BY status_issue",
           "refId": "A"
         }
       ],
